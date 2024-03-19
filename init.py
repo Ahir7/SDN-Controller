@@ -7,3 +7,5 @@ function foo() {
 foo();
 console.log(x); // 1
 add(a+b)
+c = a+b;
+c
