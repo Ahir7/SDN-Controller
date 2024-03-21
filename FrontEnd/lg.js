@@ -6,6 +6,7 @@ var CONF = {
     force: {
         width: 960,
         height: 500,
+        
         dist: 200,
         charge: -600
     }
