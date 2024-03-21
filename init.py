@@ -3,11 +3,7 @@
 # Forward at the IP layer based on the static routing table
 # Respond to an ICMP echo request to the router itself
 # For IP packets that fail to match the routing table, an ICMP network unreachable packet is sent
-from ryu.base import app_manager
 
-from ryu.controller import ofp_event
-from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
-from ryu.ofproto import ofproto_v1_3
 
 
 from pox.core import core
@@ -79,41 +75,137 @@ class routerConnection(object):
           ip = IPAddr('0.0.0.0') # No ip assigned
           arpTable[dpid][port][ip] = mac
           portTable[dpid].append([port, mac, ip])
-class MyController(app_manager.RyuApp):
-    OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
-    def __init__(self, *args, **kwargs):
-        super(MyController, self).__init__(*args, **kwargs)
+          #Print arp table
+          log.debug('-' * 50 + 'arpTable' + '-' * 50)
+          log.debug(arpTable)
 
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
-    def switch_features_handler(self, ev):
-        datapath = ev.msg.datapath
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+          #Print port mapping table
+          log.debug('-' * 50 + 'portTable' + '-' * 50)
+          log.debug(portTable)
 
-        # Add your logic here to handle switch features
-        # For example, install a default flow entry
+          # iprouting-table
+          # The structure is: [[network, next-hop ip address, next-hop interface name, next-hop interface ip, next-hop port], [...],...]
+          # The next hop IP is 0.0.0.0, which means direct deliveryself.routeTable = []
+        self.routeTable.append(['10.0.1.0/24',
+                                  '0.0.0.0', 's1-eth1', '10.0.1.1', 1])
+        self.routeTable.append(['10.0.2.0/24',
+                                  '10.0.2.100', 's1-eth2', '10.0.2.1', 2])
+        self.routeTable.append(['10.0.3.0/24',
+                                  '10.0.3.100', 's1-eth3', '10.0.3.1', 3])
 
-        match = parser.OFPMatch()
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 0, match, actions)
+        self.connection = connection
+        connection.addListeners(self)
 
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+        #Stream delete messages
 
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        if buffer_id:
-            mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id, priority=priority,
-                                    match=match, instructions=inst)
-        else:
-            mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    match=match, instructions=inst)
-        datapath.send_msg(mod)
+      def _handle_FlowRemoved(self, event):
+          dpid = event.connection.dpid
+          log.debug('-' * 50 + "dpid=" + str(dpid) + '-' * 50)
+          log.debug('A FlowRemoved Message Recieved')
+          log.debug('---A flow has been removed')
 
-def main():
-    from ryu.cmd import manager
-    manager.main()
+      # PackerIn messages
+      def _handle_PacketIn(self, event):
+          dpid = self.connection.dpid
+          log.debug('-' * 50 + "dpid=" + str(dpid) + '-' * 50)
+          log.debug("A PacketIn Message Recieved")
+          packet = event.parsed
 
-if __name__ == "__main__":
-    main()
+          # arp
+          if packet.type == ethernet.ARP_TYPE:
+              log.debug('---It\'s an arp packet')
+              arppacket = packet.payload
+              # arp response
+              if arppacket.opcode == arp.REPLY:
+                  arpTable[self.connection.dpid][event.ofp.in_port][arppacket.protosrc] = arppacket.hwsrc
+                  arpTable[self.connection.dpid][event.ofp.in_port][arppacket.protodst] = arppacket.hwdst
+                  #Updated arp table
+                  log.debug('------arpTable learned form arp Reply srt and dst')
+                  log.debug('------' + str(arpTable))
+
+              # arp request
+              if arppacket.opcode == arp.REQUEST:
+                  log.debug('------Arp request')
+                  log.debug('------' + arppacket._to_str())
+                  arpTable[self.connection.dpid][event.ofp.in_port][arppacket.protosrc] = arppacket.hwsrc
+                  #Updated arp table
+                  log.debug('------arpTable learned form arp Request srt')
+                  log.debug('------' + str(arpTable))
+
+                  #Send arp response
+                  if arppacket.protodst in arpTable[self.connection.dpid][event.ofp.in_port]:
+                      log.debug('------I know that ip %s,send reply' % arppacket.protodst)
+
+                      # Construct arp response
+                      a = arppacket
+                      r = arp()
+                      r.hwtype = a.hwtype
+                      r.prototype = a.prototype
+                      r.hwlen = a.hwlen
+                      r.protolen = a.protolen
+                      r.opcode = arp.REPLY
+                      r.hwdst = a.hwsrc
+                      r.protodst = a.protosrc
+                      r.protosrc = a.protodst
+                      r.hwsrc = arpTable[self.connection.dpid][event.ofp.in_port][arppacket.protodst]
+                      e = ethernet(type=packet.type, src=r.hwsrc, dst=a.hwsrc)
+                      e.set_payload(r)
+                      msg = of.ofp_packet_out()
+                      msg.data = e.pack()
+                      msg.actions.append(of.ofp_action_output(port=event.ofp.in_port))
+                      self.connection.send(msg)
+              #ip package
+          if packet.type == ethernet.IP_TYPE:
+              log.debug('---It\'s an ip packet')
+              ippacket = packet.payload
+              # destination ip
+              dstip = ippacket.dstip
+
+              # Search the port mapping table, determine whether the destination IP is the router itself, and respond to icmp echo reply
+              for t in portTable[dpid]:
+                  selfip = t[pPORT_IP]
+                  # If the destination IP address is the address owned by the current router
+                  if dstip == selfip:
+                      # If it is an icmp echo request message
+                      if ippacket.protocol == ipv4.ICMP_PROTOCOL:
+                          log.debug('!!!!!!!!!!An icmp for me!!!!!!!!!!!')
+                          icmppacket = ippacket.payload
+                          # Is it icmp echo request?
+                          if icmppacket.type == TYPE_ECHO_REQUEST:
+                              selfmac = t[pPORT_MAC]
+                              log.debug('!!!!!!!!!!An icmp echo request for me!!!!!!!!!!!')
+
+                              # Construct icmp package
+                              r = icmppacket
+                              r.type = TYPE_ECHO_REPLY
+
+                              # Construct ip package
+                              s = ipv4()
+                              s.protocol = ipv4.ICMP_PROTOCOL
+                              s.srcip = selfip
+                              s.dstip = ippacket.srcip
+                              s.payload = r
+
+                              # Construct Ethernet frame
+                              e = ethernet()
+                              e.type = ethernet.IP_TYPE
+                              e.src = selfmac
+                              e.dst = packet.src
+                              e.payload = s
+
+                              # Construct PacketOut message
+                              # Send back icmp packet
+                              msg = of.ofp_packet_out()
+                              msg.data = e.pack()
+                              msg.actions.append(of.ofp_action_output(port=event.port))
+                              self.connection.send(msg)
+                              log.debug('!!!!!!!!!!Reply it!!!!!!!!!!!')
+                              return
+                          else:
+                              # Ignore all icmp packets sent to the router except icmp echo request.
+                              return
+                      # Non-icmp packets sent to the router
+                      else:
+                          # Lose packets directly, the controller will not respond temporarily.
+                          return
