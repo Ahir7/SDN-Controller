@@ -1,9 +1,0 @@
-ryu
-flask
-pandas
-numpy
-scipy
-
-seaborn
-matplotlib
-scikit-learn

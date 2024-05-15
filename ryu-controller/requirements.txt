@@ -1,0 +1,7 @@
+ryu
+kazoo
+kubernetes
+psycopg2-binary
+sqlalchemy
+
+

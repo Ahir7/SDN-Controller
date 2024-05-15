@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+
+  zookeeper:
+    image: zookeeper:3.8
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/data
+    networks:
+      - sdn_zt
+    
+  postgres-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: sdn_policy_db
+      POSTGRES_USER: sdn_user
+      POSTGRES_PASSWORD: sdn_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sdn_zt
+
+  fastapi-api:
+    build: ./fastapi-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres-db
+    environment:
+      DATABASE_URL: "postgresql://sdn_user:sdn_password@postgres-db/sdn_policy_db"
+    networks:
+      - sdn_zt
+
+  ryu-controller:
+    build: ./ryu-controller
+    ports:
+      - "6653:6653" # OpenFlow
+    depends_on:
+      - postgres-db
+      - zookeeper
+    cap_add:
+      - NET_ADMIN # Needed for network operations
+    networks:
+      - sdn_zt
+
+  telemetry-collector:
+    build: ./telemetry-collector
+    ports:
+      - "6343:6343/udp" # sFlow
+      - "9100:9100"      # Prometheus metrics
+    networks:
+      - sdn_zt
+
+  ml-analytics:
+    build: ./ml-analytics
+    depends_on:
+      - fastapi-api
+    environment:
+      API_URL: "http://fastapi-api:8000"
+    networks:
+      - sdn_zt
+
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus
+    command: --config.file=/etc/prometheus/prometheus.yml
+    depends_on:
+      - telemetry-collector
+      - ryu-controller
+    networks:
+      - sdn_zt
+
+  grafana:
+    image: grafana/grafana:9.5.1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - sdn_zt
+
+volumes:
+  zookeeper_data:
+  postgres_data:
+  grafana_data:
+
+networks:
+  sdn_zt:
+    driver: bridge
+
+
