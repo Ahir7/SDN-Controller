@@ -1,3 +1,5 @@
-# Placeholder for telemetry collector dependencies
+pysflow
+pygnmi
+prometheus-client
 
 

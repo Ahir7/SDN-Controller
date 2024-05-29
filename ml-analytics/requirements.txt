@@ -1,3 +1,4 @@
-# Placeholder for ML analytics dependencies
+scikit-learn
+requests
 
 

@@ -37,8 +37,11 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
   - `prometheus` with minimal `prometheus/prometheus.yml` (scrapes itself and placeholder metrics on `telemetry-collector:9100`).
   - `grafana` container with persistent volume (no dashboards provisioned yet).
 
-- **Placeholders scaffolded**
-  - `telemetry-collector/` and `ml-analytics/` each contain a `Dockerfile` and `requirements.txt` placeholder, to be implemented in later prompts.
+- **Telemetry & ML analytics pipeline**
+  - `telemetry-collector/collector.py` exposes Prometheus metrics on port 9100 and includes stubs for:
+    - sFlow listener (UDP 6343) using `pysflow` (simulated in this version)
+    - gNMI subscriber using `pygnmi` (simulated in this version)
+  - `ml-analytics/analytics.py` runs an `IsolationForest` to detect anomalies on synthetic traffic and triggers closed-loop mitigation by POSTing a high-priority `DENY` policy to the FastAPI IBN API.
 
 ### Project structure
 
@@ -60,10 +63,12 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
 │   └── zt_controller.py
 ├── telemetry-collector/
 │   ├── Dockerfile
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── collector.py
 ├── ml-analytics/
 │   ├── Dockerfile
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── analytics.py
 └── prometheus/
     └── prometheus.yml
 ```
@@ -90,18 +95,20 @@ Services will start in dependency order. First run may take a few minutes while 
 
 - `fastapi-api` uses `DATABASE_URL` from Compose: `postgresql://sdn_user:sdn_password@postgres-db/sdn_policy_db`.
 - `ryu-controller` uses the same database URL (defaults internally if not set) and connects to Zookeeper at `zookeeper:2181`.
+- `ml-analytics` uses `API_URL` (defaults to `http://fastapi-api:8000`) to call the IBN API for mitigation.
+- `telemetry-collector` exports Prometheus metrics on port `9100`; sFlow (UDP 6343) and gNMI paths are stubbed in this version.
 
 ### Current limitations
 
 - Policy enforcement implements the DENY path; ALLOW is not yet implemented.
-- `telemetry-collector` and `ml-analytics` are placeholders pending later prompts.
+- `telemetry-collector` and `ml-analytics` operate on simulated/synthetic inputs in this version (no real device ingestion yet).
 - Kubernetes watcher expects in-cluster config when running inside K8s; for local runs it falls back to `kubeconfig` on the host.
 
 ### Next steps (from the blueprint)
 
 - Extend policy translation to include L4 protocol/port matching and ALLOW logic.
-- Implement `telemetry-collector` (sFlow + gNMI ingestion and Prometheus metrics).
-- Implement `ml-analytics` with Isolation Forest and feedback loop via the IBN API.
+- Replace collector stubs with real sFlow parsing and gNMI subscriptions; enrich Prometheus metrics.
+- Tune `ml-analytics` feature extraction and model training, wired to real telemetry features.
 - Provision Grafana dashboards and expand Prometheus targets.
 - Add Mininet scripts for validation and benchmarking.
 
