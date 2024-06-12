@@ -34,7 +34,9 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
     - Installs a very low-priority `NORMAL` rule to keep the CNI’s baseline connectivity (“priority override” model).
 
 - **Observability**
-  - `prometheus` with minimal `prometheus/prometheus.yml` (scrapes itself and placeholder metrics on `telemetry-collector:9100`).
+  - `prometheus` uses `prometheus/prometheus.yml` to scrape:
+    - itself (`localhost:9090`)
+    - `telemetry-collector:9100` for hybrid telemetry metrics.
   - `grafana` container with persistent volume (no dashboards provisioned yet).
 
 - **Telemetry & ML analytics pipeline**
@@ -69,8 +71,10 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── analytics.py
-└── prometheus/
-    └── prometheus.yml
+├── prometheus/
+│   └── prometheus.yml
+└── validation/
+    └── kube_topo.py
 ```
 
 ### How to run
@@ -104,13 +108,13 @@ Services will start in dependency order. First run may take a few minutes while 
 - `telemetry-collector` and `ml-analytics` operate on simulated/synthetic inputs in this version (no real device ingestion yet).
 - Kubernetes watcher expects in-cluster config when running inside K8s; for local runs it falls back to `kubeconfig` on the host.
 
-### Next steps (from the blueprint)
+### Validation and next steps (from the blueprint)
 
 - Extend policy translation to include L4 protocol/port matching and ALLOW logic.
 - Replace collector stubs with real sFlow parsing and gNMI subscriptions; enrich Prometheus metrics.
 - Tune `ml-analytics` feature extraction and model training, wired to real telemetry features.
 - Provision Grafana dashboards and expand Prometheus targets.
-- Add Mininet scripts for validation and benchmarking.
+- Use `validation/kube_topo.py` with Mininet to validate end‑to‑end policy enforcement (baseline ping, apply DENY policy via FastAPI, ping blocked).
 
 ### References
 

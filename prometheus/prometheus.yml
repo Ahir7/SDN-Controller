@@ -1,6 +1,5 @@
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
 
 scrape_configs:
   - job_name: 'prometheus'
@@ -9,6 +8,15 @@ scrape_configs:
 
   - job_name: 'telemetry-collector'
     static_configs:
-      - targets: ['telemetry-collector:9100']
+      - targets: ['telemetry-collector:9100']  # [cite_start]gNMI/sFlow metrics [cite: 272]
 
+  - job_name: 'ryu-controller'
+    # Assuming Ryu app exposes metrics on 8080 (would need a lib)
+    # static_configs:
+    #   - targets: ['ryu-controller:8080']  # [cite: 273]
+
+  - job_name: 'ml-analytics'
+    # Assuming ML app exposes metrics
+    # static_configs:
+    #   - targets: ['ml-analytics:8081']  # [cite: 274]
 
