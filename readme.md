@@ -25,11 +25,12 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
   - High Availability:
     - `kazoo`-based leader election via Zookeeper (`/sdn/controller_election`). Winner sets OpenFlow role MASTER; others stay SLAVE.
   - Kubernetes integration:
-    - Watches Pod events; emits custom Ryu events to reconcile policy-to-flows mapping.
-  - Policy reconciliation (initial version):
-    - Loads ENABLED policies from Postgres (the IBN API’s source of truth).
-    - Implements high-priority DENY rules (DROP) between matched source/destination IP sets.
-    - Notes: ALLOW path is stubbed for now; focus is DENY as per security overlay model.
+    - Watches Pod events; emits custom Ryu events (`EventK8sPodUpdate`) to reconcile policy-to-flows mapping.
+  - Policy reconciliation (event-driven):
+    - A background DB watcher emits `EventPolicyUpdate` when ENABLED policies change in Postgres (the IBN API’s source of truth).
+    - Handlers in the main Ryu event loop keep an in-memory `policy_map` in sync and reconcile flows accordingly.
+    - High-priority DENY rules (DROP) are installed between matched source/destination IP sets; ALLOW is still stubbed (focus is DENY as per the security overlay model).
+    - All Zero-Trust rules are tagged with an OpenFlow cookie so they can be safely purged and re-installed during reconciliation without touching CNI baseline flows.
   - Baseline coexistence:
     - Installs a very low-priority `NORMAL` rule to keep the CNI’s baseline connectivity (“priority override” model).
 
