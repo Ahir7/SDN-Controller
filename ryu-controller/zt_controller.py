@@ -1,6 +1,6 @@
 import logging
 from ryu.base import app_manager
-from ryu.controller import ofp_event
+from ryu.controller import ofp_event, event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ipv4
@@ -22,9 +22,17 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://sdn_user:sdn_passwor
 ZT_COOKIE = 0xDEADBEEF
 
 
+class EventPolicyUpdate(event.EventBase):
+    """Custom event emitted when policies change in PostgreSQL."""
+    def __init__(self, policy_map):
+        super(EventPolicyUpdate, self).__init__()
+        self.policy_map = policy_map
+
+
 class ZeroTrustController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
-    _EVENTS = [EventK8sPodUpdate]  # Register our custom event [cite: 154]
+    # Custom events that this app may emit to observers
+    _EVENTS = [EventK8sPodUpdate, EventPolicyUpdate]  # [cite: 154]
 
     def __init__(self, *args, **kwargs):
         super(ZeroTrustController, self).__init__(*args, **kwargs)
@@ -151,16 +159,23 @@ class ZeroTrustController(app_manager.RyuApp):
             dp.send_msg(mod)
 
     def _policy_watch_loop(self):
-        """Background loop to keep policy_map in sync with PostgreSQL.
+        """Background loop to emit policy update events from PostgreSQL.
 
-        When this controller is Master, it periodically reloads policies
-        from the database and reconciles flows to match the latest intent.
+        When this controller is Master, it periodically reads ENABLED policies
+        and emits an EventPolicyUpdate so reconciliation can happen in the
+        main Ryu event loop.
         """
         while True:
             try:
                 if self.is_master:
-                    self.load_policies_from_db()
-                    self.reconcile_all_flows()
+                    session = self.DBSession()
+                    try:
+                        policies = session.query(PolicyDB).filter_by(status="ENABLED").all()
+                        policy_map = {p.id: p for p in policies}
+                    finally:
+                        session.close()
+                    # Emit custom event with the latest policies
+                    self.send_event_to_observers(EventPolicyUpdate(policy_map))
                 # Sleep a short interval; tunable based on latency requirements.
                 hub.sleep(5)
             except Exception as e:
@@ -187,6 +202,20 @@ class ZeroTrustController(app_manager.RyuApp):
                 del self.pod_label_map[ev.pod_ip]
         
         # Now that state is updated, reconcile flows
+        self.reconcile_all_flows()
+
+    @set_ev_cls(EventPolicyUpdate)
+    def policy_update_handler(self, ev):
+        """Handle policy update events from the DB watcher.
+
+        This keeps policy_map synchronized with PostgreSQL and triggers
+        reconciliation in response to changes.
+        """
+        if not self.is_master:
+            return
+
+        self.logger.info("Received EventPolicyUpdate; refreshing policy_map and reconciling flows.")
+        self.policy_map = ev.policy_map or {}
         self.reconcile_all_flows()
 
     def load_policies_from_db(self):
