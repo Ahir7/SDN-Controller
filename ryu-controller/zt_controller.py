@@ -17,6 +17,10 @@ import os
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://sdn_user:sdn_password@postgres-db/sdn_policy_db")
 
+# Cookie used to tag ZeroTrustController-installed flow rules so they can be
+# safely removed during reconciliation without touching CNI/base flows.
+ZT_COOKIE = 0xDEADBEEF
+
 
 class ZeroTrustController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -31,17 +35,20 @@ class ZeroTrustController(app_manager.RyuApp):
         self.pod_label_map = {}  # { "10.1.1.5": {"app": "frontend", ...} }
         self.policy_map = {}     # { "policy_id": {...policy_obj...} }
 
-        # Start HA Manager
+        # Start HA Manager (leader election)
         self.ha_manager = ZKLeaderElection(self)
         hub.spawn(self.ha_manager.start)
 
-        # Start K8s Watcher
+        # Start K8s Watcher (Pod events -> custom Ryu events)
         self.k8s_watcher = K8sWatcher(self)
         hub.spawn(self.k8s_watcher.start)
         
-        # Setup DB connection
+        # Setup DB connection (policy source of truth)
         engine = create_engine(DATABASE_URL)
         self.DBSession = sessionmaker(bind=engine)
+
+        # Start background policy watcher so new policies are picked up without restart
+        hub.spawn(self._policy_watch_loop)
         
         self.logger.info("ZeroTrustController Initialized.")
 
@@ -93,10 +100,16 @@ class ZeroTrustController(app_manager.RyuApp):
         ofp_parser = dp.ofproto_parser
         match = ofp_parser.OFPMatch()
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_NORMAL)]  # "NORMAL" = CNI
-        self.add_flow(dp, 1, match, actions)  # Priority 1 (lowest)
+        # Baseline rule should NOT use the ZT_COOKIE so that it is never
+        # removed by our reconciliation cleanup.
+        self.add_flow(dp, 1, match, actions, use_cookie=False)  # Priority 1 (lowest)
 
-    def add_flow(self, datapath, priority, match, actions):
-        """Helper to add a flow rule."""
+    def add_flow(self, datapath, priority, match, actions, use_cookie=True):
+        """Helper to add a flow rule.
+
+        If use_cookie is True, the rule is tagged so it can be removed safely
+        during reconciliation without affecting CNI/base flows.
+        """
         if not self.is_master:
             return  # Slaves don't install rules
             
@@ -106,13 +119,53 @@ class ZeroTrustController(app_manager.RyuApp):
             inst = [ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS, actions)]
         else:
             inst = []  # Empty instructions => DROP
+
+        cookie = ZT_COOKIE if use_cookie else 0
+
         mod = ofp_parser.OFPFlowMod(
             datapath=datapath,
+            cookie=cookie,
             priority=priority,
             match=match,
             instructions=inst
         )
         datapath.send_msg(mod)
+
+    def clear_zt_flows(self):
+        """Remove all previously installed Zero-Trust (ZT) flow rules.
+
+        This uses the cookie tag to avoid touching CNI or other non-ZT flows.
+        """
+        for dp in self.datapaths.values():
+            ofp = dp.ofproto
+            ofp_parser = dp.ofproto_parser
+            mod = ofp_parser.OFPFlowMod(
+                datapath=dp,
+                cookie=ZT_COOKIE,
+                cookie_mask=0xFFFFFFFFFFFFFFFF,
+                command=ofp.OFPFC_DELETE,
+                out_port=ofp.OFPP_ANY,
+                out_group=ofp.OFPG_ANY,
+                match=ofp_parser.OFPMatch()
+            )
+            dp.send_msg(mod)
+
+    def _policy_watch_loop(self):
+        """Background loop to keep policy_map in sync with PostgreSQL.
+
+        When this controller is Master, it periodically reloads policies
+        from the database and reconciles flows to match the latest intent.
+        """
+        while True:
+            try:
+                if self.is_master:
+                    self.load_policies_from_db()
+                    self.reconcile_all_flows()
+                # Sleep a short interval; tunable based on latency requirements.
+                hub.sleep(5)
+            except Exception as e:
+                self.logger.error(f"Policy watch loop error: {e}")
+                hub.sleep(5)
 
     # --- Policy and K8s Event Handling ---
 
@@ -163,7 +216,10 @@ class ZeroTrustController(app_manager.RyuApp):
             return
             
         self.logger.info("--- Starting Policy Reconciliation ---")
-        # TODO: Clear existing high-priority flows
+
+        # Clear any previously-installed ZT flows so we can re-install from
+        # the current policy_map without leaving stale rules behind.
+        self.clear_zt_flows()
         
         for policy in self.policy_map.values():
             # Find all source and dest IPs that match the policy's label selectors
@@ -198,7 +254,9 @@ class ZeroTrustController(app_manager.RyuApp):
                     for dp in self.datapaths.values():
                         ofp_parser = dp.ofproto_parser
                         match = ofp_parser.OFPMatch(**match_fields)
-                        self.add_flow(dp, priority, match, actions)  # actions=[] means DROP
+                        # Security overlay rules are tagged with ZT_COOKIE so
+                        # they can be safely removed during future reconciliations.
+                        self.add_flow(dp, priority, match, actions, use_cookie=True)  # actions=[] means DROP
             
             self.logger.info(f"Installed DENY rules for policy: {policy.name}")
 
