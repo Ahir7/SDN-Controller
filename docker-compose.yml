@@ -46,6 +46,26 @@ services:
       - NET_ADMIN # Needed for network operations
     networks:
       - sdn_zt
+    environment:
+      # Single-node by default; can be overridden to an ensemble string.
+      ZK_HOSTS: "zookeeper:2181"
+
+  # Second Ryu controller instance to participate in HA election.
+  # It connects to the same Zookeeper and PostgreSQL services but is exposed
+  # on a different host port so Mininet/OVS can multi-home to both.
+  ryu-controller-2:
+    build: ./ryu-controller
+    ports:
+      - "6654:6653" # Host port 6654 -> container 6653
+    depends_on:
+      - postgres-db
+      - zookeeper
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - sdn_zt
+    environment:
+      ZK_HOSTS: "zookeeper:2181"
 
   telemetry-collector:
     build: ./telemetry-collector

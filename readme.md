@@ -23,7 +23,7 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
 - **Ryu Controller – HA + Kubernetes-aware policy enforcement**
   - Files: `ryu-controller/requirements.txt`, `ryu-controller/Dockerfile`, `ryu-controller/ha_manager.py`, `ryu-controller/k8s_watcher.py`, `ryu-controller/zt_controller.py`.
   - High Availability:
-    - `kazoo`-based leader election via Zookeeper (`/sdn/controller_election`). Winner sets OpenFlow role MASTER; others stay SLAVE.
+    - `kazoo`-based leader election via Zookeeper (`/sdn/controller_election`). Multiple Ryu instances (`ryu-controller`, `ryu-controller-2`) participate, but at any time only one is MASTER; others stay SLAVE.
   - Kubernetes integration:
     - Watches Pod events; emits custom Ryu events (`EventK8sPodUpdate`) to reconcile policy-to-flows mapping.
   - Policy reconciliation (event-driven):
@@ -41,9 +41,9 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
   - `grafana` container with persistent volume (no dashboards provisioned yet).
 
 - **Telemetry & ML analytics pipeline**
-  - `telemetry-collector/collector.py` exposes Prometheus metrics on port 9100 and includes stubs for:
-    - sFlow listener (UDP 6343) using `pysflow` (simulated in this version)
-    - gNMI subscriber using `pygnmi` (simulated in this version)
+  - `telemetry-collector/collector.py` exposes Prometheus metrics on port 9100 and:
+    - Listens on UDP 6343 for real sFlow datagrams (counting packets as a first step toward full parsing; configurable via `SFLOW_PORT`).
+    - Includes a gNMI subscriber stub (to be wired to `pygnmi` and real OpenConfig targets later).
   - `ml-analytics/analytics.py` runs an `IsolationForest` to detect anomalies on synthetic traffic and triggers closed-loop mitigation by POSTing a high-priority `DENY` policy to the FastAPI IBN API.
 
 ### Project structure

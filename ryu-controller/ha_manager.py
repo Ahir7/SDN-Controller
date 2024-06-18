@@ -2,12 +2,14 @@ from kazoo.client import KazooClient
 from kazoo.recipe.election import Election
 import logging
 import time
+import os
 
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-ZK_HOSTS = 'zookeeper:2181'
+# Allow configuration of an ensemble (e.g., "zookeeper-1:2181,zookeeper-2:2181")
+ZK_HOSTS = os.environ.get("ZK_HOSTS", "zookeeper:2181")
 ELECTION_PATH = '/sdn/controller_election'
 
 
@@ -20,7 +22,7 @@ class ZKLeaderElection:
 
     def start(self):
         self.zk.start()
-        log.info("Connecting to Zookeeper...")
+        log.info(f"Connecting to Zookeeper at {ZK_HOSTS}...")
         self.election = Election(self.zk, ELECTION_PATH)
         # Start the election process.
         # The election.run() method will block until this instance

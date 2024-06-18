@@ -16,13 +16,19 @@ def create_k8s_topology():
         autoSetMacs=True
     )
 
-    print("Adding remote controller (pointing to Docker)...")
-    # Point to the Ryu controller running in Docker [cite: 305]
+    print("Adding remote controllers (pointing to Docker)...")
+    # Point to the Ryu controllers running in Docker [cite: 305]
     c0 = net.addController(
         'c0',
         controller=RemoteController,
         ip='127.0.0.1',  # Docker host IP
-        port=6653        # OpenFlow port
+        port=6653        # First Ryu controller
+    )
+    c1 = net.addController(
+        'c1',
+        controller=RemoteController,
+        ip='127.0.0.1',
+        port=6654        # Second Ryu controller instance
     )
 
     print("Adding switches (K8s Nodes)...")
@@ -51,8 +57,10 @@ def create_k8s_topology():
     print("Starting network...")
     net.build()
     c0.start()
-    s1.start([c0])
-    s2.start([c0])
+    c1.start()
+    # Start switches with both controllers to emulate multi-controller OVS
+    s1.start([c0, c1])
+    s2.start([c0, c1])
 
     print("Network is running. Type 'h1 ping h3' to test.")
     print("Run Test C (Policy Enforcement)[cite: 319]:")
@@ -69,7 +77,7 @@ def create_k8s_topology():
 
 if __name__ == '__main__':
     # [cite_start]This Mininet script emulates the K8s node topology [cite: 301]
-    # and connects to our remote Ryu controller.
+    # and connects to our remote Ryu controller cluster.
     setLogLevel('info')
     create_k8s_topology()
 
