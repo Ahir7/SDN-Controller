@@ -25,13 +25,20 @@ class ZKLeaderElection:
         log.info(f"Connecting to Zookeeper at {ZK_HOSTS}...")
         self.election = Election(self.zk, ELECTION_PATH)
         # Start the election process.
-        # The election.run() method will block until this instance
-        # is elected leader[cite: 39].
-        self.election.run(self.become_leader)
+        # election.run() calls become_leader() when this node wins, then BLOCKS
+        # inside become_leader() until we explicitly return from it.
+        # When become_leader() returns, election.run() automatically re-enters election.
+        while True:
+            try:
+                self.election.run(self.become_leader)
+            except Exception as e:
+                log.error(f"Election error: {e}. Reconnecting in 5s...")
+                time.sleep(5)
 
     def become_leader(self):
         """
         This function is called when this instance wins the election[cite: 40].
+        We must block here (not return) while we want to stay master.
         """
         log.info("--- I am now the MASTER controller ---")
         self.is_leader = True
@@ -39,33 +46,23 @@ class ZKLeaderElection:
         if hasattr(self.ryu_app, 'set_master_role'):
             self.ryu_app.set_master_role(is_master=True)
         
-        # Keep running logic while master
-        while True:
-            try:
-                # Check if still leader (best-effort; depends on Kazoo internals)
-                if hasattr(self.election, 'is_leader') and not self.election.is_leader:
-                    break
+        # Block here to hold leadership. Monitor ZK connection health.
+        try:
+            while self.zk.connected:
                 time.sleep(1)
-            except Exception:
-                break
+        except Exception as e:
+            log.error(f"Leadership monitoring error: {e}")
         
-        # If loop breaks, we are no longer leader
-        self.lose_leadership()
-
-    def lose_leadership(self):
-        """
-        Called when election is lost or ZK session is lost[cite: 44].
-        """
-        log.info("--- I am now a SLAVE controller ---")
+        # If we exit this function, we've lost leadership
+        log.info("--- Lost leadership, transitioning to SLAVE ---")
         self.is_leader = False
         if hasattr(self.ryu_app, 'set_master_role'):
             self.ryu_app.set_master_role(is_master=False)
-        
-        # Re-run the election to get back in line
-        self.election.run(self.become_leader)
 
     def stop(self):
-        self.election.cancel()  # Cleanly leave election
-        self.zk.stop()
+        if self.election:
+            self.election.cancel()  # Cleanly leave election
+        if self.zk:
+            self.zk.stop()
 
 

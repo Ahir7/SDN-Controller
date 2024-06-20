@@ -23,17 +23,28 @@ class EventK8sPodUpdate(event.EventBase):
 class K8sWatcher:
     def __init__(self, ryu_app):
         self.ryu_app = ryu_app
+        self.k8s_available = False
+        self.v1 = None
+        self.watcher = None
+        
         try:
             # Load in-cluster config when running as a Pod [cite: 128]
             config.load_incluster_config()
             log.info("Loaded in-cluster Kubernetes config.")
+            self.k8s_available = True
         except config.ConfigException:
-            # Load kube_config for local development [cite: 129]
-            config.load_kube_config()
-            log.info("Loaded local kube_config.")
+            try:
+                # Load kube_config for local development [cite: 129]
+                config.load_kube_config()
+                log.info("Loaded local kube_config.")
+                self.k8s_available = True
+            except (config.ConfigException, FileNotFoundError) as e:
+                log.warning(f"Kubernetes config not available: {e}. "
+                           f"K8s watcher will run in stub mode (no Pod events).")
         
-        self.v1 = client.CoreV1Api()
-        self.watcher = watch.Watch()
+        if self.k8s_available:
+            self.v1 = client.CoreV1Api()
+            self.watcher = watch.Watch()
 
     def start(self):
         log.info("Starting Kubernetes Pod event watcher...")
@@ -43,7 +54,15 @@ class K8sWatcher:
     def _watch_pods(self):
         """
         Watch stream for K8s Pod events[cite: 134].
+        If K8s is not available, this becomes a no-op stub.
         """
+        if not self.k8s_available:
+            log.info("K8s watcher running in stub mode (no Kubernetes config).")
+            # Sleep indefinitely; controller can still use ip_block policies
+            while True:
+                time.sleep(60)
+            return
+        
         while True:
             try:
                 stream = self.watcher.stream(self.v1.list_pod_for_all_namespaces)

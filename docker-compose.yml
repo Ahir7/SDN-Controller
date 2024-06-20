@@ -49,6 +49,7 @@ services:
     environment:
       # Single-node by default; can be overridden to an ensemble string.
       ZK_HOSTS: "zookeeper:2181"
+      DATABASE_URL: "postgresql://sdn_user:sdn_password@postgres-db/sdn_policy_db"
 
   # Second Ryu controller instance to participate in HA election.
   # It connects to the same Zookeeper and PostgreSQL services but is exposed
@@ -66,6 +67,7 @@ services:
       - sdn_zt
     environment:
       ZK_HOSTS: "zookeeper:2181"
+      DATABASE_URL: "postgresql://sdn_user:sdn_password@postgres-db/sdn_policy_db"
 
   telemetry-collector:
     build: ./telemetry-collector

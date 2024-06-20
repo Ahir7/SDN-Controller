@@ -107,7 +107,31 @@ Services will start in dependency order. First run may take a few minutes while 
 
 - Policy enforcement implements the DENY path; ALLOW is not yet implemented.
 - `telemetry-collector` and `ml-analytics` operate on simulated/synthetic inputs in this version (no real device ingestion yet).
-- Kubernetes watcher expects in-cluster config when running inside K8s; for local runs it falls back to `kubeconfig` on the host.
+- Kubernetes watcher gracefully falls back to stub mode if no K8s config is available (controller can still use `ip_block` policies).
+- Single-node Zookeeper (for production, deploy a 3-node ensemble).
+
+### Troubleshooting
+
+**Services won't start:**
+- Run `docker compose logs <service-name>` to check specific service logs
+- Ensure ports 2181, 5432, 6653, 6654, 8000, 9090, 3000 are not in use
+- Wait 30s for DB init; FastAPI retries connection 5 times with exponential backoff
+
+**Ryu controller shows "K8s watcher running in stub mode":**
+- This is normal if not running in a K8s cluster
+- Controller will still enforce `ip_block` policies from Mininet/validation
+
+**HA not working (both controllers show MASTER):**
+- Check Zookeeper logs: `docker compose logs zookeeper`
+- Verify both controllers connect to same ZK: check `ZK_HOSTS` env var
+
+**Policy not enforced in Mininet:**
+- Check Ryu is MASTER: `docker compose logs ryu-controller | grep MASTER`
+- Verify policy created: `curl http://localhost:8000/api/v1/policies`
+- Check flows in Mininet: `dpctl dump-flows`
+
+**Health check:**
+- Run `bash health_check.sh` to verify all services
 
 ### Validation and next steps (from the blueprint)
 
