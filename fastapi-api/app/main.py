@@ -55,3 +55,53 @@ def get_all_policies(db: Session = Depends(get_db)):
     return policies
 
 
+@app.get("/api/v1/policies/{policy_id}", response_model=models.PolicyResponse)
+def get_policy(policy_id: str, db: Session = Depends(get_db)):
+    """
+    Retrieve a specific policy by ID.
+    """
+    policy = db.query(models.PolicyDB).filter(models.PolicyDB.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    return policy
+
+
+@app.put("/api/v1/policies/{policy_id}", response_model=models.PolicyResponse)
+def update_policy(policy_id: str, policy: models.PolicySchema, db: Session = Depends(get_db)):
+    """
+    Update an existing policy.
+    The Ryu controller will detect this change via its polling mechanism.
+    """
+    db_policy = db.query(models.PolicyDB).filter(models.PolicyDB.id == policy_id).first()
+    if not db_policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    # Update fields
+    db_policy.name = policy.name
+    db_policy.priority = policy.priority
+    db_policy.source = policy.source.dict()
+    db_policy.destination = policy.destination.dict()
+    db_policy.service = [s.dict() for s in policy.service] if policy.service else None
+    db_policy.action = policy.action
+    db_policy.status = policy.status
+    
+    db.commit()
+    db.refresh(db_policy)
+    return db_policy
+
+
+@app.delete("/api/v1/policies/{policy_id}", status_code=204)
+def delete_policy(policy_id: str, db: Session = Depends(get_db)):
+    """
+    Delete a policy by ID.
+    The Ryu controller will detect this change and remove associated flows.
+    """
+    db_policy = db.query(models.PolicyDB).filter(models.PolicyDB.id == policy_id).first()
+    if not db_policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    db.delete(db_policy)
+    db.commit()
+    return None
+
+

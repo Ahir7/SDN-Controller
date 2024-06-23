@@ -5,7 +5,10 @@ import requests
 import time
 import os
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 log = logging.getLogger(__name__)
 
 API_URL = os.environ.get("API_URL", "http://fastapi-api:8000")

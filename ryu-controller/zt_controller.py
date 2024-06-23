@@ -51,8 +51,12 @@ class ZeroTrustController(app_manager.RyuApp):
         self.k8s_watcher = K8sWatcher(self)
         hub.spawn(self.k8s_watcher.start)
         
-        # Setup DB connection (policy source of truth)
-        engine = create_engine(DATABASE_URL)
+        # Setup DB connection (policy source of truth) with pooling
+        engine = create_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,  # Verify connections before using them
+            pool_recycle=3600,   # Recycle connections after 1 hour
+        )
         self.DBSession = sessionmaker(bind=engine)
 
         # Start background policy watcher so new policies are picked up without restart
@@ -232,7 +236,8 @@ class ZeroTrustController(app_manager.RyuApp):
             self.policy_map = {p.id: p for p in policies}
             self.logger.info(f"Loaded {len(self.policy_map)} active policies.")
         except Exception as e:
-            self.logger.error(f"Failed to load policies from DB: {e}")
+            self.logger.error(f"Failed to load policies from DB: {e}. "
+                            f"Will retry in next polling cycle.")
         finally:
             session.close()
 
@@ -272,20 +277,44 @@ class ZeroTrustController(app_manager.RyuApp):
             # Install DENY rules
             for src_ip in source_ips:
                 for dst_ip in dest_ips:
+                    # Base match fields
                     match_fields = {
                         'eth_type': 0x0800,  # IPv4
                         'ipv4_src': src_ip,
                         'ipv4_dst': dst_ip
                     }
                     
-                    # TODO: Add L4 (TCP/UDP port) matching from policy.service
-                    
-                    for dp in self.datapaths.values():
-                        ofp_parser = dp.ofproto_parser
-                        match = ofp_parser.OFPMatch(**match_fields)
-                        # Security overlay rules are tagged with ZT_COOKIE so
-                        # they can be safely removed during future reconciliations.
-                        self.add_flow(dp, priority, match, actions, use_cookie=True)  # actions=[] means DROP
+                    # Add L4 (TCP/UDP port) matching from policy.service
+                    # Blueprint section 2.7: L4 protocol/port matching
+                    if policy.service:
+                        for svc in policy.service:
+                            svc_match = match_fields.copy()
+                            
+                            # Map protocol string to OpenFlow IP protocol number
+                            if svc.get('protocol') == 'TCP':
+                                svc_match['ip_proto'] = 6  # TCP
+                                if svc.get('port'):
+                                    svc_match['tcp_dst'] = svc['port']
+                            elif svc.get('protocol') == 'UDP':
+                                svc_match['ip_proto'] = 17  # UDP
+                                if svc.get('port'):
+                                    svc_match['udp_dst'] = svc['port']
+                            elif svc.get('protocol') == 'ICMP':
+                                svc_match['ip_proto'] = 1  # ICMP
+                            
+                            # Install flow for this specific service
+                            for dp in self.datapaths.values():
+                                ofp_parser = dp.ofproto_parser
+                                match = ofp_parser.OFPMatch(**svc_match)
+                                self.add_flow(dp, priority, match, actions, use_cookie=True)
+                    else:
+                        # No service specified: match all traffic between src/dst
+                        for dp in self.datapaths.values():
+                            ofp_parser = dp.ofproto_parser
+                            match = ofp_parser.OFPMatch(**match_fields)
+                            # Security overlay rules are tagged with ZT_COOKIE so
+                            # they can be safely removed during future reconciliations.
+                            self.add_flow(dp, priority, match, actions, use_cookie=True)  # actions=[] means DROP
             
             self.logger.info(f"Installed DENY rules for policy: {policy.name}")
 

@@ -12,7 +12,10 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
   - Files: `fastapi-api/requirements.txt`, `fastapi-api/Dockerfile`, `fastapi-api/app/models.py`, `fastapi-api/app/main.py`.
   - Endpoints:
     - POST `/api/v1/policies` – create a policy (validates with Pydantic, persists to PostgreSQL).
-    - GET `/api/v1/policies` – list policies.
+    - GET `/api/v1/policies` – list all policies.
+    - GET `/api/v1/policies/{id}` – retrieve specific policy.
+    - PUT `/api/v1/policies/{id}` – update policy.
+    - DELETE `/api/v1/policies/{id}` – delete policy.
   - Models:
     - SQLAlchemy `PolicyDB` table with fields: `id`, `name`, `priority`, `source`, `destination`, `service`, `action`, `status`.
     - Pydantic schemas mirror the declarative policy from the blueprint (Table 2), including `label_selector` and `ip_block` support.
@@ -27,18 +30,22 @@ This repository implements a Zero-Trust SDN architecture with a microservice sta
   - Kubernetes integration:
     - Watches Pod events; emits custom Ryu events (`EventK8sPodUpdate`) to reconcile policy-to-flows mapping.
   - Policy reconciliation (event-driven):
-    - A background DB watcher emits `EventPolicyUpdate` when ENABLED policies change in Postgres (the IBN API’s source of truth).
+    - A background DB watcher emits `EventPolicyUpdate` when ENABLED policies change in Postgres (the IBN API's source of truth).
     - Handlers in the main Ryu event loop keep an in-memory `policy_map` in sync and reconcile flows accordingly.
     - High-priority DENY rules (DROP) are installed between matched source/destination IP sets; ALLOW is still stubbed (focus is DENY as per the security overlay model).
+    - **L4 Protocol/Port Matching**: Supports TCP, UDP, ICMP with optional port matching from policy `service` field (Blueprint section 2.7).
     - All Zero-Trust rules are tagged with an OpenFlow cookie so they can be safely purged and re-installed during reconciliation without touching CNI baseline flows.
   - Baseline coexistence:
-    - Installs a very low-priority `NORMAL` rule to keep the CNI’s baseline connectivity (“priority override” model).
+    - Installs a very low-priority `NORMAL` rule to keep the CNI's baseline connectivity ("priority override" model).
 
 - **Observability**
   - `prometheus` uses `prometheus/prometheus.yml` to scrape:
     - itself (`localhost:9090`)
     - `telemetry-collector:9100` for hybrid telemetry metrics.
-  - `grafana` container with persistent volume (no dashboards provisioned yet).
+  - `grafana` container with:
+    - Pre-provisioned Prometheus datasource.
+    - Pre-loaded SDN Telemetry Dashboard (sFlow/gNMI metrics).
+    - Persistent volume for custom dashboards.
 
 - **Telemetry & ML analytics pipeline**
   - `telemetry-collector/collector.py` exposes Prometheus metrics on port 9100 and:
@@ -103,12 +110,30 @@ Services will start in dependency order. First run may take a few minutes while 
 - `ml-analytics` uses `API_URL` (defaults to `http://fastapi-api:8000`) to call the IBN API for mitigation.
 - `telemetry-collector` exports Prometheus metrics on port `9100`; sFlow (UDP 6343) and gNMI paths are stubbed in this version.
 
-### Current limitations
+### Current implementation status vs blueprint
 
-- Policy enforcement implements the DENY path; ALLOW is not yet implemented.
-- `telemetry-collector` and `ml-analytics` operate on simulated/synthetic inputs in this version (no real device ingestion yet).
-- Kubernetes watcher gracefully falls back to stub mode if no K8s config is available (controller can still use `ip_block` policies).
-- Single-node Zookeeper (for production, deploy a 3-node ensemble).
+**✅ Fully Implemented:**
+- Multi-controller HA with Zookeeper election
+- PostgreSQL-backed policy source of truth
+- Event-driven K8s Pod watching (with graceful fallback)
+- Cookie-tagged flow reconciliation
+- L4 protocol/port matching (TCP, UDP, ICMP)
+- Full CRUD API for policies (POST, GET, PUT, DELETE)
+- Grafana dashboard provisioning
+- Real sFlow UDP listener (counting datagrams)
+- Closed-loop ML mitigation
+- Mininet multi-controller validation
+- Benchmark test suite
+
+**⚠️ Partially Implemented:**
+- ALLOW policies (architecture ready, logic stubbed)
+- sFlow feature parsing (listener works, no packet parsing yet)
+- gNMI subscriber (stub only)
+
+**📝 Not Implemented (future work):**
+- FastAPI authentication/authorization
+- PostgreSQL LISTEN/NOTIFY (uses polling instead)
+- 3-node Zookeeper ensemble (single-node works for dev)
 
 ### Troubleshooting
 
@@ -133,13 +158,24 @@ Services will start in dependency order. First run may take a few minutes while 
 **Health check:**
 - Run `bash health_check.sh` to verify all services
 
-### Validation and next steps (from the blueprint)
+### Validation and testing
 
-- Extend policy translation to include L4 protocol/port matching and ALLOW logic.
-- Replace collector stubs with real sFlow parsing and gNMI subscriptions; enrich Prometheus metrics.
-- Tune `ml-analytics` feature extraction and model training, wired to real telemetry features.
-- Provision Grafana dashboards and expand Prometheus targets.
-- Use `validation/kube_topo.py` with Mininet to validate end‑to‑end policy enforcement (baseline ping, apply DENY policy via FastAPI, ping blocked).
+**Mininet Topology**:
+- `validation/kube_topo.py`: Multi-controller topology (2 switches, 4 hosts, dual controllers for HA)
+- Run: `sudo python validation/kube_topo.py`
+
+**Benchmark Suite**:
+- `validation/benchmark_suite.sh`: Automated test suite implementing Blueprint Table 4
+- Tests: baseline performance, ZTA overhead, policy enforcement, L4 matching, ML mitigation, HA failover
+- Run: `bash validation/benchmark_suite.sh`
+
+### Next steps (remaining from blueprint)
+
+- Implement ALLOW policy logic (currently DENY-only security model).
+- Replace telemetry stubs with real sFlow parsing (pysflow) and gNMI subscriptions (pygnmi).
+- Wire ML analytics to consume real flow features from telemetry collector.
+- Add authentication/authorization to FastAPI (currently open API).
+- Deploy 3-node Zookeeper ensemble for production HA.
 
 ### References
 
